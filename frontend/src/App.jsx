@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ToastProvider, useToast } from './context/ToastContext';
@@ -8,37 +8,47 @@ import Navbar from './components/Navbar';
 import ManagementSidebar from './components/ManagementSidebar';
 import SalesSidebar from './components/SalesSidebar';
 
-// Pages
-import Login from './pages/Login';
+// Pages - Lazy Loaded for Fast Initial Page Load & Code Splitting
+const Login = lazy(() => import('./pages/Login'));
 
 // Management Pages
-import ManagementDashboard from './pages/ManagementDashboard';
-import BudgetTargets from './pages/BudgetTargets';
-import SalesMonitoring from './pages/SalesMonitoring';
-import PurchaseMonitoring from './pages/PurchaseMonitoring';
-import InventoryOverview from './pages/InventoryOverview';
-import RackDisplayOverview from './pages/RackDisplayOverview';
-import AgeingClearance from './pages/AgeingClearance';
-import DamagedGoods from './pages/DamagedGoods';
-import VendorOverview from './pages/VendorOverview';
-import FinancialOverview from './pages/FinancialOverview';
-import CapitalOverview from './pages/CapitalOverview';
-import SalesAnalytics from './pages/SalesAnalytics';
-import PurchaseAnalytics from './pages/PurchaseAnalytics';
-import ReportsPage from './pages/ReportsPage';
-import NotificationsPage from './pages/NotificationsPage';
-import SettingsPage from './pages/SettingsPage';
+const ManagementDashboard = lazy(() => import('./pages/ManagementDashboard'));
+const BudgetTargets = lazy(() => import('./pages/BudgetTargets'));
+const SalesMonitoring = lazy(() => import('./pages/SalesMonitoring'));
+const PurchaseMonitoring = lazy(() => import('./pages/PurchaseMonitoring'));
+const InventoryOverview = lazy(() => import('./pages/InventoryOverview'));
+const RackDisplayOverview = lazy(() => import('./pages/RackDisplayOverview'));
+const AgeingClearance = lazy(() => import('./pages/AgeingClearance'));
+const DamagedGoods = lazy(() => import('./pages/DamagedGoods'));
+const VendorOverview = lazy(() => import('./pages/VendorOverview'));
+const FinancialOverview = lazy(() => import('./pages/FinancialOverview'));
+const CapitalOverview = lazy(() => import('./pages/CapitalOverview'));
+const SalesAnalytics = lazy(() => import('./pages/SalesAnalytics'));
+const PurchaseAnalytics = lazy(() => import('./pages/PurchaseAnalytics'));
+const ReportsPage = lazy(() => import('./pages/ReportsPage'));
+const NotificationsPage = lazy(() => import('./pages/NotificationsPage'));
+const SettingsPage = lazy(() => import('./pages/SettingsPage'));
 
 // Sales Executive Pages
-import SalesDashboard from './pages/SalesDashboard';
-import ProductSearch from './pages/ProductSearch';
-import BarcodeScannerPage from './pages/BarcodeScannerPage';
-import StockAvailability from './pages/StockAvailability';
-import CartPage from './pages/CartPage';
-import BillingPage from './pages/BillingPage';
-import SalesHistory from './pages/SalesHistory';
-import MySalesActivity from './pages/MySalesActivity';
-import UserProfile from './pages/UserProfile';
+const SalesDashboard = lazy(() => import('./pages/SalesDashboard'));
+const ProductSearch = lazy(() => import('./pages/ProductSearch'));
+const BarcodeScannerPage = lazy(() => import('./pages/BarcodeScannerPage'));
+const StockAvailability = lazy(() => import('./pages/StockAvailability'));
+const CartPage = lazy(() => import('./pages/CartPage'));
+const BillingPage = lazy(() => import('./pages/BillingPage'));
+const SalesHistory = lazy(() => import('./pages/SalesHistory'));
+const MySalesActivity = lazy(() => import('./pages/MySalesActivity'));
+const UserProfile = lazy(() => import('./pages/UserProfile'));
+
+// Fast loading skeleton spinner
+const PageLoader = () => (
+  <div className="flex-1 min-h-[400px] flex items-center justify-center">
+    <div className="flex items-center space-x-3 px-4 py-3 bg-white rounded-xl shadow-sm border border-slate-200">
+      <div className="w-5 h-5 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+      <span className="text-xs font-semibold text-slate-600">Loading view...</span>
+    </div>
+  </div>
+);
 
 // Protected Route Component
 const ProtectedRoute = ({ children, allowedRole }) => {
@@ -107,67 +117,73 @@ function App() {
       <ToastProvider>
         <AuthProvider>
           <CartProvider>
-            <Routes>
-              {/* Public Login Route */}
-              <Route path="/login" element={<Login />} />
-              <Route path="/" element={<RootRedirect />} />
+            <Suspense fallback={<PageLoader />}>
+              <Routes>
+                {/* Public Login Route */}
+                <Route path="/login" element={<Login />} />
+                <Route path="/" element={<RootRedirect />} />
 
-              {/* Management Module Routes */}
-              <Route
-                path="/management/*"
-                element={
-                  <ProtectedRoute allowedRole="MANAGEMENT">
-                    <AppLayout moduleType="management">
-                      <Routes>
-                        <Route path="dashboard" element={<ManagementDashboard />} />
-                        <Route path="targets" element={<BudgetTargets />} />
-                        <Route path="sales" element={<SalesMonitoring />} />
-                        <Route path="purchases" element={<PurchaseMonitoring />} />
-                        <Route path="inventory" element={<InventoryOverview />} />
-                        <Route path="racks" element={<RackDisplayOverview />} />
-                        <Route path="ageing" element={<AgeingClearance />} />
-                        <Route path="damaged" element={<DamagedGoods />} />
-                        <Route path="vendors" element={<VendorOverview />} />
-                        <Route path="financials" element={<FinancialOverview />} />
-                        <Route path="capital" element={<CapitalOverview />} />
-                        <Route path="sales-analytics" element={<SalesAnalytics />} />
-                        <Route path="purchase-analytics" element={<PurchaseAnalytics />} />
-                        <Route path="reports" element={<ReportsPage />} />
-                        <Route path="notifications" element={<NotificationsPage />} />
-                        <Route path="settings" element={<SettingsPage />} />
-                        <Route path="*" element={<Navigate to="/management/dashboard" replace />} />
-                      </Routes>
-                    </AppLayout>
-                  </ProtectedRoute>
-                }
-              />
+                {/* Management Module Routes */}
+                <Route
+                  path="/management/*"
+                  element={
+                    <ProtectedRoute allowedRole="MANAGEMENT">
+                      <AppLayout moduleType="management">
+                        <Suspense fallback={<PageLoader />}>
+                          <Routes>
+                            <Route path="dashboard" element={<ManagementDashboard />} />
+                            <Route path="targets" element={<BudgetTargets />} />
+                            <Route path="sales" element={<SalesMonitoring />} />
+                            <Route path="purchases" element={<PurchaseMonitoring />} />
+                            <Route path="inventory" element={<InventoryOverview />} />
+                            <Route path="racks" element={<RackDisplayOverview />} />
+                            <Route path="ageing" element={<AgeingClearance />} />
+                            <Route path="damaged" element={<DamagedGoods />} />
+                            <Route path="vendors" element={<VendorOverview />} />
+                            <Route path="financials" element={<FinancialOverview />} />
+                            <Route path="capital" element={<CapitalOverview />} />
+                            <Route path="sales-analytics" element={<SalesAnalytics />} />
+                            <Route path="purchase-analytics" element={<PurchaseAnalytics />} />
+                            <Route path="reports" element={<ReportsPage />} />
+                            <Route path="notifications" element={<NotificationsPage />} />
+                            <Route path="settings" element={<SettingsPage />} />
+                            <Route path="*" element={<Navigate to="/management/dashboard" replace />} />
+                          </Routes>
+                        </Suspense>
+                      </AppLayout>
+                    </ProtectedRoute>
+                  }
+                />
 
-              {/* Sales Executive Module Routes */}
-              <Route
-                path="/sales/*"
-                element={
-                  <ProtectedRoute allowedRole="SALES_EXECUTIVE">
-                    <AppLayout moduleType="sales">
-                      <Routes>
-                        <Route path="dashboard" element={<SalesDashboard />} />
-                        <Route path="search" element={<ProductSearch />} />
-                        <Route path="scanner" element={<BarcodeScannerPage />} />
-                        <Route path="stock" element={<StockAvailability />} />
-                        <Route path="cart" element={<CartPage />} />
-                        <Route path="billing" element={<BillingPage />} />
-                        <Route path="history" element={<SalesHistory />} />
-                        <Route path="activity" element={<MySalesActivity />} />
-                        <Route path="profile" element={<UserProfile />} />
-                        <Route path="*" element={<Navigate to="/sales/dashboard" replace />} />
-                      </Routes>
-                    </AppLayout>
-                  </ProtectedRoute>
-                }
-              />
+                {/* Sales Executive Module Routes */}
+                <Route
+                  path="/sales/*"
+                  element={
+                    <ProtectedRoute allowedRole="SALES_EXECUTIVE">
+                      <AppLayout moduleType="sales">
+                        <Suspense fallback={<PageLoader />}>
+                          <Routes>
+                            <Route path="dashboard" element={<SalesDashboard />} />
+                            <Route path="search" element={<ProductSearch />} />
+                            <Route path="scanner" element={<BarcodeScannerPage />} />
+                            <Route path="stock" element={<StockAvailability />} />
+                            <Route path="cart" element={<CartPage />} />
+                            <Route path="billing" element={<BillingPage />} />
+                            <Route path="history" element={<SalesHistory />} />
+                            <Route path="activity" element={<MySalesActivity />} />
+                            <Route path="profile" element={<UserProfile />} />
+                            <Route path="*" element={<Navigate to="/sales/dashboard" replace />} />
+                          </Routes>
+                        </Suspense>
+                      </AppLayout>
+                    </ProtectedRoute>
+                  }
+                />
 
-              {/* Catch-all */}
-              <Route path="*" element={<RootRedirect />} />
-            </Routes>
+                {/* Catch-all */}
+                <Route path="*" element={<RootRedirect />} />
+              </Routes>
+            </Suspense>
           </CartProvider>
         </AuthProvider>
       </ToastProvider>

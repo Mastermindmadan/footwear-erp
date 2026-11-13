@@ -3,22 +3,33 @@ const router = express.Router();
 const prisma = require('../db');
 const { authenticate, requireManagement } = require('../middleware/auth');
 
+let filtersCache = null;
+let filtersCacheTime = 0;
+const FILTERS_CACHE_TTL = 60000; // 60 seconds
+
 // GET /api/products/meta/filters - Brands, Categories, Sizes, Colours
 router.get('/meta/filters', authenticate, async (req, res) => {
   try {
-    const brands = await prisma.brand.findMany({ orderBy: { name: 'asc' } });
-    const categories = await prisma.category.findMany({ orderBy: { name: 'asc' } });
+    if (filtersCache && Date.now() - filtersCacheTime < FILTERS_CACHE_TTL) {
+      return res.json(filtersCache);
+    }
 
-    // Distinct sizes & colours
-    const variants = await prisma.productVariant.findMany({
-      select: { size: true, colour: true },
-      distinct: ['size', 'colour'],
-    });
+    const [brands, categories, variants] = await Promise.all([
+      prisma.brand.findMany({ orderBy: { name: 'asc' } }),
+      prisma.category.findMany({ orderBy: { name: 'asc' } }),
+      prisma.productVariant.findMany({
+        select: { size: true, colour: true },
+        distinct: ['size', 'colour'],
+      }),
+    ]);
 
     const sizes = [...new Set(variants.map((v) => v.size))].sort();
     const colours = [...new Set(variants.map((v) => v.colour))].sort();
 
-    res.json({ brands, categories, sizes, colours });
+    filtersCache = { brands, categories, sizes, colours };
+    filtersCacheTime = Date.now();
+
+    res.json(filtersCache);
   } catch (error) {
     console.error('Filter meta error:', error);
     res.status(500).json({ error: 'Failed to fetch filter metadata' });

@@ -3,10 +3,21 @@ const router = express.Router();
 const prisma = require('../db');
 const { authenticate, requireManagement } = require('../middleware/auth');
 
+// Short in-memory cache for fast response
+let invCache = null;
+let invCacheTime = 0;
+const INV_CACHE_TTL = 15000; // 15 seconds
+
 // GET /api/inventory - Inventory overview
 router.get('/', authenticate, async (req, res) => {
   try {
     const { search, brandId, categoryId, lowStockOnly, rackId } = req.query;
+
+    // Use cache if no filters applied
+    const isUnfiltered = !search && !brandId && !categoryId && !lowStockOnly && !rackId;
+    if (isUnfiltered && invCache && Date.now() - invCacheTime < INV_CACHE_TTL) {
+      return res.json(invCache);
+    }
 
     const where = {};
     if (brandId) where.product = { ...where.product, brandId };
@@ -82,7 +93,13 @@ router.get('/', authenticate, async (req, res) => {
       results = results.filter((r) => r.rackCode === rackId);
     }
 
-    res.json({ inventory: results, total: results.length });
+    const payload = { inventory: results, total: results.length };
+    if (isUnfiltered) {
+      invCache = payload;
+      invCacheTime = Date.now();
+    }
+
+    res.json(payload);
   } catch (error) {
     console.error('Inventory fetch error:', error);
     res.status(500).json({ error: 'Failed to fetch inventory' });
@@ -136,6 +153,8 @@ router.post('/adjust', authenticate, requireManagement, async (req, res) => {
         },
       }),
     ]);
+
+    invCache = null; // Invalidate cache
 
     res.json({
       message: 'Stock adjusted successfully',
