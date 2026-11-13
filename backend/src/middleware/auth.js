@@ -3,6 +3,10 @@ const prisma = require('../db');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'footwear-erp-ultra-secure-key-2026';
 
+// In-memory user cache to eliminate redundant cross-ocean DB lookups on every request
+const userMemoryCache = new Map();
+const USER_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+
 // Authenticate any logged-in user
 const authenticate = async (req, res, next) => {
   try {
@@ -13,6 +17,13 @@ const authenticate = async (req, res, next) => {
 
     const token = authHeader.split(' ')[1];
     const decoded = jwt.verify(token, JWT_SECRET);
+
+    // Fast memory cache check
+    const cached = userMemoryCache.get(decoded.userId);
+    if (cached && Date.now() - cached.cachedAt < USER_CACHE_TTL) {
+      req.user = cached.user;
+      return next();
+    }
 
     const user = await prisma.user.findUnique({
       where: { id: decoded.userId },
@@ -28,9 +39,11 @@ const authenticate = async (req, res, next) => {
     });
 
     if (!user || !user.active) {
+      userMemoryCache.delete(decoded.userId);
       return res.status(401).json({ error: 'User not found or deactivated' });
     }
 
+    userMemoryCache.set(decoded.userId, { user, cachedAt: Date.now() });
     req.user = user;
     next();
   } catch (error) {

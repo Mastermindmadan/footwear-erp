@@ -33,56 +33,56 @@ router.get('/', authenticate, async (req, res) => {
       periodEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
     }
 
-    const targetsComparison = await Promise.all(
-      employees.map(async (emp) => {
-        const target = emp.salesTargets[0];
-        const targetAmount = target ? target.targetAmount : type === 'DAILY' ? 15000 : 250000;
-        const targetPairs = target ? target.targetPairs : type === 'DAILY' ? 4 : 50;
+    // Run ONE single query for all sales in this period instead of 2 * N queries
+    const salesInPeriod = await prisma.sale.findMany({
+      where: {
+        saleDate: { gte: periodStart, lte: periodEnd },
+        paymentStatus: 'COMPLETED',
+      },
+      select: {
+        salesExecutiveId: true,
+        grandTotal: true,
+        items: { select: { quantity: true } },
+      },
+    });
 
-        // Actual sales in this period
-        const actualSales = await prisma.sale.aggregate({
-          where: {
-            salesExecutiveId: emp.id,
-            saleDate: { gte: periodStart, lte: periodEnd },
-            paymentStatus: 'COMPLETED',
-          },
-          _sum: { grandTotal: true },
-          _count: { id: true },
-        });
+    const empSalesMap = {};
+    salesInPeriod.forEach((s) => {
+      if (!empSalesMap[s.salesExecutiveId]) {
+        empSalesMap[s.salesExecutiveId] = { totalAmount: 0, totalPairs: 0, billsCount: 0 };
+      }
+      empSalesMap[s.salesExecutiveId].totalAmount += s.grandTotal;
+      empSalesMap[s.salesExecutiveId].billsCount++;
+      s.items.forEach((it) => (empSalesMap[s.salesExecutiveId].totalPairs += it.quantity));
+    });
 
-        const saleItems = await prisma.saleItem.findMany({
-          where: {
-            sale: {
-              salesExecutiveId: emp.id,
-              saleDate: { gte: periodStart, lte: periodEnd },
-              paymentStatus: 'COMPLETED',
-            },
-          },
-          select: { quantity: true },
-        });
+    const targetsComparison = employees.map((emp) => {
+      const target = emp.salesTargets[0];
+      const targetAmount = target ? target.targetAmount : type === 'DAILY' ? 15000 : 250000;
+      const targetPairs = target ? target.targetPairs : type === 'DAILY' ? 4 : 50;
 
-        const achievedPairs = saleItems.reduce((acc, it) => acc + it.quantity, 0);
-        const achievedAmount = actualSales._sum.grandTotal || 0;
-        const remainingAmount = Math.max(0, targetAmount - achievedAmount);
-        const achievementPct = targetAmount > 0 ? Math.min(100, Math.round((achievedAmount / targetAmount) * 100)) : 0;
+      const actualStats = empSalesMap[emp.id] || { totalAmount: 0, totalPairs: 0, billsCount: 0 };
+      const achievedAmount = actualStats.totalAmount;
+      const achievedPairs = actualStats.totalPairs;
+      const remainingAmount = Math.max(0, targetAmount - achievedAmount);
+      const achievementPct = targetAmount > 0 ? Math.min(100, Math.round((achievedAmount / targetAmount) * 100)) : 0;
 
-        return {
-          employeeId: emp.id,
-          employeeName: emp.name,
-          email: emp.email,
-          avatar: emp.avatar,
-          targetId: target?.id,
-          targetType: type,
-          targetAmount,
-          targetPairs,
-          achievedAmount,
-          achievedPairs,
-          remainingAmount,
-          achievementPct,
-          billsCount: actualSales._count.id || 0,
-        };
-      })
-    );
+      return {
+        employeeId: emp.id,
+        employeeName: emp.name,
+        email: emp.email,
+        avatar: emp.avatar,
+        targetId: target?.id,
+        targetType: type,
+        targetAmount,
+        targetPairs,
+        achievedAmount,
+        achievedPairs,
+        remainingAmount,
+        achievementPct,
+        billsCount: actualStats.billsCount,
+      };
+    });
 
     res.json({
       period: type,

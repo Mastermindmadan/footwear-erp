@@ -3,16 +3,16 @@ const router = express.Router();
 const prisma = require('../db');
 const { authenticate, requireManagement } = require('../middleware/auth');
 
-// Simple short-lived in-memory cache to prevent redundant cross-continental DB roundtrips
+// Short in-memory cache
 let mgtCache = null;
 let mgtCacheTime = 0;
-const CACHE_TTL_MS = 20000; // 20 seconds cache
+const CACHE_TTL_MS = 30000; // 30 seconds
 
 // GET /api/dashboard/management
 router.get('/management', authenticate, requireManagement, async (req, res) => {
   try {
-    const now = Date.now();
-    if (mgtCache && now - mgtCacheTime < CACHE_TTL_MS) {
+    const nowMs = Date.now();
+    if (mgtCache && nowMs - mgtCacheTime < CACHE_TTL_MS) {
       return res.json(mgtCache);
     }
 
@@ -21,70 +21,61 @@ router.get('/management', authenticate, requireManagement, async (req, res) => {
     const todayEnd = new Date(nowDate.getFullYear(), nowDate.getMonth(), nowDate.getDate(), 23, 59, 59);
 
     const monthStart = new Date(nowDate.getFullYear(), nowDate.getMonth(), 1, 0, 0, 0);
-    const monthEnd = new Date(nowDate.getFullYear(), nowDate.getMonth() + 1, 0, 23, 59, 59);
+    const sevenDaysAgo = new Date(nowDate.getFullYear(), nowDate.getMonth(), nowDate.getDate() - 6, 0, 0, 0);
+    const earliestSalesDate = monthStart < sevenDaysAgo ? monthStart : sevenDaysAgo;
 
-    // Prepare 7-day sales promises in parallel
-    const dayPromises = [];
-    const dayLabels = [];
-    for (let i = 6; i >= 0; i--) {
-      const d = new Date(nowDate.getFullYear(), nowDate.getMonth(), nowDate.getDate() - i);
-      const startOfDay = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0);
-      const endOfDay = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59);
-      dayLabels.push(d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }));
-      dayPromises.push(
-        prisma.sale.aggregate({
-          where: {
-            saleDate: { gte: startOfDay, lte: endOfDay },
-            paymentStatus: 'COMPLETED',
-          },
-          _sum: { grandTotal: true },
-          _count: { id: true },
-        })
-      );
-    }
-
-    // Execute ALL database queries in parallel with Promise.all
+    // Run only 6 focused queries concurrently instead of 18 serial ones
     const [
-      todaySales,
-      monthlySales,
       totalSalesAllTime,
+      recentCompletedSales,
       totalPurchases,
       inventoryItems,
       totalProducts,
       expensesAgg,
-      saleItems,
       vendorsAgg,
       recentTransactions,
       salesExecs,
-      ...dailySalesResults
     ] = await Promise.all([
-      // 1. Sales metrics
-      prisma.sale.aggregate({
-        where: {
-          saleDate: { gte: todayStart, lte: todayEnd },
-          paymentStatus: 'COMPLETED',
-        },
-        _sum: { grandTotal: true, subtotal: true },
-        _count: { id: true },
-      }),
-      prisma.sale.aggregate({
-        where: {
-          saleDate: { gte: monthStart, lte: monthEnd },
-          paymentStatus: 'COMPLETED',
-        },
-        _sum: { grandTotal: true, subtotal: true },
-        _count: { id: true },
-      }),
+      // 1. All-time completed sales totals
       prisma.sale.aggregate({
         where: { paymentStatus: 'COMPLETED' },
         _sum: { grandTotal: true, subtotal: true },
       }),
-      // 2. Purchases metrics
+
+      // 2. All sales since earliest date with items in ONE query (computes today, monthly, 7-day chart, COGS & top products)
+      prisma.sale.findMany({
+        where: {
+          paymentStatus: 'COMPLETED',
+          saleDate: { gte: earliestSalesDate },
+        },
+        select: {
+          id: true,
+          grandTotal: true,
+          saleDate: true,
+          salesExecutiveId: true,
+          items: {
+            select: {
+              quantity: true,
+              finalPrice: true,
+              variant: {
+                select: {
+                  productId: true,
+                  purchasePrice: true,
+                  product: { select: { name: true } },
+                },
+              },
+            },
+          },
+        },
+      }),
+
+      // 3. Purchases
       prisma.purchase.aggregate({
         _sum: { grandTotal: true, paidAmount: true, outstandingAmount: true },
         _count: { id: true },
       }),
-      // 3. Inventory calculation
+
+      // 4. Inventory items (lean select)
       prisma.inventory.findMany({
         select: {
           id: true,
@@ -112,34 +103,21 @@ router.get('/management', authenticate, requireManagement, async (req, res) => {
           },
         },
       }),
-      // 4. Total products
+
+      // 5. Total product count
       prisma.product.count(),
-      // 5. Expenses
+
+      // 6. Expenses
       prisma.expense.aggregate({
         _sum: { amount: true },
       }),
-      // 6. Cost of goods sold & top products
-      prisma.saleItem.findMany({
-        where: {
-          sale: { paymentStatus: 'COMPLETED' },
-        },
-        select: {
-          quantity: true,
-          finalPrice: true,
-          variant: {
-            select: {
-              productId: true,
-              purchasePrice: true,
-              product: { select: { name: true } },
-            },
-          },
-        },
-      }),
+
       // 7. Vendors outstanding
       prisma.vendor.aggregate({
         _sum: { outstandingAmount: true },
       }),
-      // 8. Recent transactions
+
+      // 8. Recent 8 transactions
       prisma.sale.findMany({
         take: 8,
         orderBy: { saleDate: 'desc' },
@@ -155,24 +133,93 @@ router.get('/management', authenticate, requireManagement, async (req, res) => {
           },
         },
       }),
-      // 9. Best performing sales executives
+
+      // 9. Sales executives list with monthly target
       prisma.user.findMany({
         where: { role: 'SALES_EXECUTIVE', active: true },
-        include: {
-          sales: {
-            where: { paymentStatus: 'COMPLETED' },
-            select: { grandTotal: true, saleDate: true, items: { select: { quantity: true } } },
-          },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          avatar: true,
           salesTargets: {
             where: { targetType: 'MONTHLY' },
             orderBy: { createdAt: 'desc' },
             take: 1,
+            select: { targetAmount: true },
           },
         },
       }),
-      // 10. Daily sales chart queries
-      ...dayPromises,
     ]);
+
+    // Compute sales metrics in memory
+    let todaySalesTotal = 0;
+    let todayOrdersCount = 0;
+    let monthlySalesTotal = 0;
+    let monthlyOrdersCount = 0;
+    let totalCogs = 0;
+    const productSalesMap = {};
+    const execSalesMap = {};
+
+    // Initialize 7-day buckets
+    const dayBuckets = {};
+    const dayLabels = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(nowDate.getFullYear(), nowDate.getMonth(), nowDate.getDate() - i);
+      const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+      const label = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+      dayBuckets[key] = { date: label, amount: 0, orders: 0 };
+      dayLabels.push(key);
+    }
+
+    recentCompletedSales.forEach((sale) => {
+      const sDate = new Date(sale.saleDate);
+      const amount = sale.grandTotal || 0;
+
+      // Check today
+      if (sDate >= todayStart && sDate <= todayEnd) {
+        todaySalesTotal += amount;
+        todayOrdersCount++;
+      }
+
+      // Check month
+      if (sDate >= monthStart) {
+        monthlySalesTotal += amount;
+        monthlyOrdersCount++;
+      }
+
+      // Check 7-day chart bucket
+      const dayKey = `${sDate.getFullYear()}-${sDate.getMonth()}-${sDate.getDate()}`;
+      if (dayBuckets[dayKey]) {
+        dayBuckets[dayKey].amount += amount;
+        dayBuckets[dayKey].orders++;
+      }
+
+      // Exec sales tracking
+      if (sale.salesExecutiveId) {
+        if (!execSalesMap[sale.salesExecutiveId]) {
+          execSalesMap[sale.salesExecutiveId] = { totalSales: 0, totalPairs: 0 };
+        }
+        execSalesMap[sale.salesExecutiveId].totalSales += amount;
+        sale.items.forEach((it) => {
+          execSalesMap[sale.salesExecutiveId].totalPairs += it.quantity;
+        });
+      }
+
+      // COGS & Top products
+      sale.items.forEach((item) => {
+        totalCogs += item.quantity * (item.variant?.purchasePrice || 0);
+        const pName = item.variant?.product?.name || 'Footwear';
+        const pid = item.variant?.productId || 'unknown';
+        if (!productSalesMap[pid]) {
+          productSalesMap[pid] = { name: pName, pairs: 0, revenue: 0 };
+        }
+        productSalesMap[pid].pairs += item.quantity;
+        productSalesMap[pid].revenue += item.finalPrice;
+      });
+    });
+
+    const salesChart = dayLabels.map((key) => dayBuckets[key]);
 
     // Process inventory
     let totalInventoryValue = 0;
@@ -230,69 +277,39 @@ router.get('/management', authenticate, requireManagement, async (req, res) => {
       }
     });
 
-    // Process COGS
-    let totalCogs = 0;
-    const productSalesMap = {};
-    saleItems.forEach((item) => {
-      totalCogs += item.quantity * (item.variant?.purchasePrice || 0);
-
-      const pName = item.variant?.product?.name || 'Footwear';
-      const pid = item.variant?.productId || 'unknown';
-      if (!productSalesMap[pid]) {
-        productSalesMap[pid] = { name: pName, pairs: 0, revenue: 0 };
-      }
-      productSalesMap[pid].pairs += item.quantity;
-      productSalesMap[pid].revenue += item.finalPrice;
-    });
-
     const totalRevenue = totalSalesAllTime._sum.grandTotal || 0;
     const totalExpenses = expensesAgg._sum.amount || 0;
     const grossProfit = Math.round(totalRevenue - totalCogs);
     const netProfit = Math.round(grossProfit - totalExpenses);
     const outstandingPayments = vendorsAgg._sum.outstandingAmount || 0;
 
-    // Process top selling products
     const topSellingProducts = Object.values(productSalesMap)
       .sort((a, b) => b.revenue - a.revenue)
       .slice(0, 5);
 
-    // Process best executives
     const bestExecutives = salesExecs.map((exec) => {
-      let totalAmount = 0;
-      let totalPairs = 0;
-      exec.sales.forEach((s) => {
-        totalAmount += s.grandTotal;
-        s.items.forEach((it) => (totalPairs += it.quantity));
-      });
-
+      const stats = execSalesMap[exec.id] || { totalSales: 0, totalPairs: 0 };
       const currentTarget = exec.salesTargets[0]?.targetAmount || 100000;
-      const targetAchievement = Math.round((totalAmount / currentTarget) * 100);
+      const targetAchievement = Math.round((stats.totalSales / currentTarget) * 100);
 
       return {
         id: exec.id,
         name: exec.name,
         email: exec.email,
         avatar: exec.avatar,
-        totalSales: Math.round(totalAmount),
-        totalPairs,
+        totalSales: Math.round(stats.totalSales),
+        totalPairs: stats.totalPairs,
         targetAmount: currentTarget,
         targetAchievement,
       };
     }).sort((a, b) => b.totalSales - a.totalSales);
 
-    // Build sales chart from parallel results
-    const salesChart = dayLabels.map((label, idx) => ({
-      date: label,
-      amount: dailySalesResults[idx]?._sum?.grandTotal || 0,
-      orders: dailySalesResults[idx]?._count?.id || 0,
-    }));
-
     const responsePayload = {
       summary: {
-        todaySales: todaySales._sum.grandTotal || 0,
-        todayOrders: todaySales._count.id || 0,
-        monthlySales: monthlySales._sum.grandTotal || 0,
-        monthlyOrders: monthlySales._count.id || 0,
+        todaySales: todaySalesTotal,
+        todayOrders: todayOrdersCount,
+        monthlySales: monthlySalesTotal,
+        monthlyOrders: monthlyOrdersCount,
         totalPurchases: totalPurchases._sum.grandTotal || 0,
         totalInventoryValue: Math.round(totalInventoryValue),
         totalSellingValue: Math.round(totalSellingValue),
@@ -314,7 +331,6 @@ router.get('/management', authenticate, requireManagement, async (req, res) => {
       clearanceAlerts,
     };
 
-    // Store in cache
     mgtCache = responsePayload;
     mgtCacheTime = Date.now();
 
