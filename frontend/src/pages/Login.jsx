@@ -30,7 +30,11 @@ const Login = () => {
         navigate('/sales/dashboard');
       }
     } catch (err) {
-      showToast(err.response?.data?.error || 'Invalid email or password', 'error');
+      if (err.code === 'ECONNABORTED' || err.message?.includes('timeout')) {
+        showToast('Server is waking up (Render free tier), please retry in 10 seconds...', 'error');
+      } else {
+        showToast(err.response?.data?.error || err.message || 'Invalid email or password', 'error');
+      }
     } finally {
       setLoading(false);
     }

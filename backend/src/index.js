@@ -28,9 +28,12 @@ const PORT = process.env.PORT || 5000;
 // Middlewares
 app.use(compression());
 app.use(cors({
-  origin: '*',
+  origin: true, // Dynamically mirror origin, strictly complying with W3C credentialed CORS
   credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
 }));
+app.options('*', cors());
 app.use(express.json());
 app.use(morgan('dev'));
 

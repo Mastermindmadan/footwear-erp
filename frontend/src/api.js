@@ -1,7 +1,8 @@
 import axios from 'axios';
 
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: 'https://footwear-erp-2x2l.onrender.com/api',
+  timeout: 45000, // 45s to handle Render free-tier wake-up
   headers: {
     'Content-Type': 'application/json',
   },
