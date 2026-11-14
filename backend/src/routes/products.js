@@ -69,6 +69,10 @@ router.get('/barcode/:barcode', authenticate, async (req, res) => {
       return res.status(404).json({ error: `No footwear found with barcode: ${barcode}` });
     }
 
+    if (variant.product && variant.product.status !== 'ACTIVE') {
+      return res.status(400).json({ error: `Footwear "${variant.product.name}" has been deactivated and cannot be sold.` });
+    }
+
     res.json({ variant });
   } catch (error) {
     console.error('Barcode lookup error:', error);

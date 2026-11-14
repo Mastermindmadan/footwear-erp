@@ -48,6 +48,18 @@ const SalesMonitoring = () => {
     fetchSales();
   }, [paymentMethod, startDate, endDate]);
 
+  const handleProcessReturn = async (sale) => {
+    if (!window.confirm(`Process return & refund for Invoice #${sale.invoiceNumber}? Stock will be automatically restocked into inventory.`)) return;
+    try {
+      await api.post(`/sales/${sale.id}/return`, { reason: 'Customer Return' });
+      showToast(`Invoice #${sale.invoiceNumber} returned and stock restocked!`);
+      setSelectedSale(null);
+      fetchSales();
+    } catch (err) {
+      showToast(err.response?.data?.error || 'Failed to process return', 'error');
+    }
+  };
+
   const handleSearchSubmit = (e) => {
     e.preventDefault();
     fetchSales();
@@ -202,7 +214,14 @@ const SalesMonitoring = () => {
               ) : (
                 sales.map((sale) => (
                   <tr key={sale.id} className="hover:bg-slate-50/70 transition-colors">
-                    <td className="py-4 px-5 font-mono font-bold text-indigo-600">{sale.invoiceNumber}</td>
+                    <td className="py-4 px-5 font-mono font-bold text-indigo-600">
+                      {sale.invoiceNumber}
+                      {sale.paymentStatus === 'RETURNED' && (
+                        <span className="block mt-1 text-[10px] font-bold text-rose-600 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200 w-fit">
+                          RETURNED
+                        </span>
+                      )}
+                    </td>
                     <td className="py-4 px-4 text-slate-600 font-medium">
                       {new Date(sale.saleDate).toLocaleDateString()}{' '}
                       <span className="text-xs text-slate-400 block font-normal">
@@ -258,6 +277,7 @@ const SalesMonitoring = () => {
           isOpen={!!selectedSale}
           onClose={() => setSelectedSale(null)}
           sale={selectedSale}
+          onReturn={handleProcessReturn}
         />
       )}
     </div>

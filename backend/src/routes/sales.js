@@ -64,6 +64,10 @@ router.post('/checkout', authenticate, async (req, res) => {
           throw new Error(`Variant ${item.variantId} not found`);
         }
 
+        if (variant.product && variant.product.status !== 'ACTIVE') {
+          throw new Error(`Product "${variant.product.name}" has been deactivated and cannot be sold.`);
+        }
+
         const availableQty = variant.inventory ? variant.inventory.quantity : 0;
         const requestedQty = parseInt(item.quantity, 10);
 
@@ -136,59 +140,61 @@ router.post('/checkout', authenticate, async (req, res) => {
         },
       });
 
-      // 5. Create Sale Items and Deduct Inventory
-      for (const vi of validatedItems) {
-        await tx.saleItem.create({
-          data: {
-            saleId: sale.id,
-            variantId: vi.variant.id,
-            quantity: vi.requestedQty,
-            unitPrice: vi.unitPrice,
-            discountPercent: vi.itemDiscountPct,
-            taxPercent: vi.gstRate,
-            finalPrice: vi.lineTotalWithTax,
-          },
-        });
-
-        // Deduct inventory
-        const currentQty = vi.variant.inventory.quantity;
-        const newQty = currentQty - vi.requestedQty;
-
-        await tx.inventory.update({
-          where: { id: vi.variant.inventory.id },
-          data: {
-            quantity: newQty,
-            lastStockUpdate: new Date(),
-          },
-        });
-
-        // Record Stock Movement
-        await tx.stockMovement.create({
-          data: {
-            variantId: vi.variant.id,
-            type: 'SALE',
-            quantity: vi.requestedQty,
-            previousQty: currentQty,
-            newQty,
-            reason: `POS Sale Invoice #${invoiceNumber}`,
-            referenceId: sale.id,
-            userId: salesExecutiveId,
-          },
-        });
-
-        // If stock reaches 0 or below min stock alert, check if notification exists
-        if (newQty <= vi.variant.inventory.minStockAlert) {
-          await tx.notification.create({
+      // 5. Create Sale Items and Deduct Inventory concurrently
+      await Promise.all(
+        validatedItems.map(async (vi) => {
+          await tx.saleItem.create({
             data: {
-              type: 'LOW_STOCK',
-              title: `Low Stock Alert: ${vi.variant.product.name}`,
-              message: `Variant ${vi.variant.colour} / ${vi.variant.size} has fallen to ${newQty} pairs remaining.`,
-              severity: newQty === 0 ? 'CRITICAL' : 'WARNING',
-              link: '/management/inventory',
+              saleId: sale.id,
+              variantId: vi.variant.id,
+              quantity: vi.requestedQty,
+              unitPrice: vi.unitPrice,
+              discountPercent: vi.itemDiscountPct,
+              taxPercent: vi.gstRate,
+              finalPrice: vi.lineTotalWithTax,
             },
           });
-        }
-      }
+
+          // Deduct inventory
+          const currentQty = vi.variant.inventory.quantity;
+          const newQty = currentQty - vi.requestedQty;
+
+          await tx.inventory.update({
+            where: { id: vi.variant.inventory.id },
+            data: {
+              quantity: newQty,
+              lastStockUpdate: new Date(),
+            },
+          });
+
+          // Record Stock Movement
+          await tx.stockMovement.create({
+            data: {
+              variantId: vi.variant.id,
+              type: 'SALE',
+              quantity: vi.requestedQty,
+              previousQty: currentQty,
+              newQty,
+              reason: `POS Sale Invoice #${invoiceNumber}`,
+              referenceId: sale.id,
+              userId: salesExecutiveId,
+            },
+          });
+
+          // If stock reaches 0 or below min stock alert, check if notification exists
+          if (newQty <= vi.variant.inventory.minStockAlert) {
+            await tx.notification.create({
+              data: {
+                type: 'LOW_STOCK',
+                title: `Low Stock Alert: ${vi.variant.product.name}`,
+                message: `Variant ${vi.variant.colour} / ${vi.variant.size} has fallen to ${newQty} pairs remaining.`,
+                severity: newQty === 0 ? 'CRITICAL' : 'WARNING',
+                link: '/management/inventory',
+              },
+            });
+          }
+        })
+      );
 
       // 6. Update Customer Total Purchases
       if (finalCustomerId) {
@@ -213,6 +219,9 @@ router.post('/checkout', authenticate, async (req, res) => {
       });
 
       return sale;
+    }, {
+      maxWait: 10000,
+      timeout: 25000,
     });
 
     // Return complete sale with details
@@ -390,6 +399,100 @@ router.get('/:id', authenticate, async (req, res) => {
   } catch (error) {
     console.error('Invoice fetch error:', error);
     res.status(500).json({ error: 'Failed to fetch invoice details' });
+  }
+});
+
+// POST /api/sales/:id/return - Process Return / Refund and Restock Inventory
+router.post('/:id/return', authenticate, async (req, res) => {
+  try {
+    const { reason = 'Customer Return / Exchange' } = req.body;
+    const saleId = req.params.id;
+
+    const sale = await prisma.sale.findUnique({
+      where: { id: saleId },
+      include: {
+        items: true,
+        customer: true,
+      },
+    });
+
+    if (!sale) {
+      return res.status(404).json({ error: 'Sale record not found' });
+    }
+
+    if (sale.paymentStatus === 'RETURNED' || sale.paymentStatus === 'REFUNDED') {
+      return res.status(400).json({ error: 'This sale has already been processed for return / refund' });
+    }
+
+    // Process return inside a transaction
+    const returnResult = await prisma.$transaction(async (tx) => {
+      // 1. Update sale payment status to RETURNED
+      const updatedSale = await tx.sale.update({
+        where: { id: saleId },
+        data: {
+          paymentStatus: 'RETURNED',
+          notes: sale.notes ? `${sale.notes} | Returned: ${reason}` : `Returned: ${reason}`,
+        },
+      });
+
+      // 2. Restock each item back to inventory and log stock movement concurrently
+      await Promise.all(
+        sale.items.map(async (item) => {
+          const inv = await tx.inventory.findUnique({
+            where: { variantId: item.variantId },
+          });
+
+          if (inv) {
+            const prevQty = inv.quantity;
+            const newQty = prevQty + item.quantity;
+
+            await tx.inventory.update({
+              where: { id: inv.id },
+              data: {
+                quantity: newQty,
+                lastStockUpdate: new Date(),
+              },
+            });
+
+            await tx.stockMovement.create({
+              data: {
+                variantId: item.variantId,
+                type: 'ADJUSTMENT',
+                quantity: item.quantity,
+                previousQty: prevQty,
+                newQty,
+                reason: `Sale Return Invoice #${sale.invoiceNumber}: ${reason}`,
+                referenceId: sale.id,
+                userId: req.user.id,
+              },
+            });
+          }
+        })
+      );
+
+      // 3. Decrement customer total purchases if customer linked
+      if (sale.customerId) {
+        await tx.customer.update({
+          where: { id: sale.customerId },
+          data: {
+            totalPurchases: { decrement: sale.grandTotal },
+          },
+        });
+      }
+
+      return updatedSale;
+    }, {
+      maxWait: 10000,
+      timeout: 25000,
+    });
+
+    res.json({
+      message: `Invoice #${sale.invoiceNumber} successfully returned and inventory restocked`,
+      sale: returnResult,
+    });
+  } catch (error) {
+    console.error('Sale return error:', error);
+    res.status(500).json({ error: error.message || 'Failed to process return' });
   }
 });
 

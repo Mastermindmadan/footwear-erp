@@ -29,7 +29,7 @@ const SalesSidebar = () => {
   const { totals } = useCart();
 
   return (
-    <aside className="w-68 bg-slate-900 text-slate-300 flex flex-col h-[calc(100vh-4rem)] sticky top-16 select-none border-r border-slate-800 shadow-xl flex-shrink-0">
+    <aside className="w-68 bg-slate-900 text-slate-300 flex flex-col h-full select-none border-r border-slate-800 shadow-xl flex-shrink-0">
       <div className="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between">
         <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-400">POS Sales Suite</span>
         <span className="text-[10px] bg-emerald-500/15 text-emerald-400 font-mono px-2 py-0.5 rounded-full border border-emerald-500/30 font-semibold">

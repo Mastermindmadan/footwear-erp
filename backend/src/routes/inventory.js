@@ -191,8 +191,8 @@ router.get('/movements', authenticate, async (req, res) => {
   }
 });
 
-// GET /api/inventory/history/:variantId - History for specific variant
-router.get('/history/:variantId', authenticate, async (req, res) => {
+// Handler for specific variant history
+const getVariantHistoryHandler = async (req, res) => {
   try {
     const movements = await prisma.stockMovement.findMany({
       where: { variantId: req.params.variantId },
@@ -207,6 +207,10 @@ router.get('/history/:variantId', authenticate, async (req, res) => {
     console.error('Variant history error:', error);
     res.status(500).json({ error: 'Failed to fetch variant stock history' });
   }
-});
+};
+
+// Support both URL conventions: /api/inventory/history/:variantId and /api/inventory/:variantId/history
+router.get('/history/:variantId', authenticate, getVariantHistoryHandler);
+router.get('/:variantId/history', authenticate, getVariantHistoryHandler);
 
 module.exports = router;

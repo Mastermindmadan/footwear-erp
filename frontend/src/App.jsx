@@ -85,11 +85,11 @@ const ProtectedRoute = ({ children, allowedRole }) => {
 // Layout with contextual sidebar
 const AppLayout = ({ children, moduleType }) => {
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900">
+    <div className="h-screen flex flex-col bg-slate-50 text-slate-900 overflow-hidden">
       <Navbar />
       <div className="flex-1 flex overflow-hidden">
         {moduleType === 'management' ? <ManagementSidebar /> : <SalesSidebar />}
-        <main className="flex-1 overflow-y-auto bg-slate-50 min-h-[calc(100vh-4rem)]">
+        <main className="flex-1 overflow-y-auto bg-slate-50">
           {children}
         </main>
       </div>
